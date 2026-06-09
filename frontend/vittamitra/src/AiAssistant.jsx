@@ -1,95 +1,165 @@
-import { useState, useRef, useEffect } from "react";
+/**
+ * VittaMitra — Full React Frontend
+ *
+ * Features:
+ *  ✓ Vita AI chat powered by Anthropic Claude (via Express backend)
+ *  ✓ 🎙️ Mic input via Web Speech API — tap mic, speak, auto-fills input
+ *  ✓ Natural language expense logging sent to backend for AI parsing
+ *  ✓ Live backend health check with offline fallback mode
+ *  ✓ Real-time budget bars, stat cards, health gauge
+ *  ✓ Transaction ledger with paymentMode and category tags
+ *  ✓ Alert dismissal, profile dropdown, bottom navigation
+ *
+ * Backend setup:
+ *   cd vittamitra-backend
+ *   npm install
+ *   echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+ *   node server.js   (runs on http://localhost:4000)
+ *
+ * Frontend setup (Vite or CRA):
+ *   Place this file as src/App.jsx
+ *   npm run dev
+ */
 
-const TRANSACTIONS = [
+import { useState, useRef, useEffect, useCallback } from "react";
+
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const API_BASE = "http://localhost:4000/api";
+
+// ─── INITIAL DATA (used as fallback when backend is offline) ──────────────────
+const INIT_TRANSACTIONS = [
   {
     id: 1,
     desc: "HP Fuel Pump",
-    category: "Transport → Fuel",
+    category: "Transport",
+    subCategory: "Fuel",
     amount: -4500,
-    date: "Jun 9",
+    date: "2025-06-09",
     time: "9:02 AM",
     icon: "⛽",
+    paymentMode: "UPI",
   },
   {
     id: 2,
     desc: "Swiggy Dinner",
-    category: "Dining → Delivery",
+    category: "Dining",
+    subCategory: "Delivery",
     amount: -850,
-    date: "Jun 8",
+    date: "2025-06-08",
     time: "8:45 PM",
     icon: "🍔",
+    paymentMode: "UPI",
   },
   {
     id: 3,
     desc: "Salary Credit",
     category: "Income",
+    subCategory: null,
     amount: 82000,
-    date: "Jun 1",
+    date: "2025-06-01",
     time: "9:00 AM",
     icon: "💼",
+    paymentMode: "Bank Transfer",
   },
   {
     id: 4,
     desc: "Amazon Fresh",
     category: "Groceries",
+    subCategory: null,
     amount: -1200,
-    date: "Jun 7",
+    date: "2025-06-07",
     time: "3:10 PM",
     icon: "🛒",
+    paymentMode: "Card",
   },
   {
     id: 5,
     desc: "Netflix",
     category: "Subscriptions",
+    subCategory: null,
     amount: -649,
-    date: "Jun 5",
+    date: "2025-06-05",
     time: "12:00 AM",
     icon: "📺",
+    paymentMode: "Card",
   },
   {
     id: 6,
     desc: "Cafe Coffee Day",
-    category: "Dining → Cafe",
+    category: "Dining",
+    subCategory: "Cafe",
     amount: -320,
-    date: "Jun 6",
+    date: "2025-06-06",
     time: "11:20 AM",
     icon: "☕",
+    paymentMode: "UPI",
   },
   {
     id: 7,
     desc: "Ola Cab",
-    category: "Transport → Cab",
+    category: "Transport",
+    subCategory: "Cab",
     amount: -250,
-    date: "Jun 7",
+    date: "2025-06-07",
     time: "7:30 AM",
     icon: "🚕",
+    paymentMode: "Wallet",
   },
   {
     id: 8,
     desc: "Big Basket",
     category: "Groceries",
+    subCategory: null,
     amount: -1890,
-    date: "Jun 4",
+    date: "2025-06-04",
     time: "5:15 PM",
     icon: "🧺",
+    paymentMode: "UPI",
   },
 ];
 
-const BUDGET = [
-  { label: "Transport", used: 68, color: "#6366f1", icon: "🚗" },
-  { label: "Dining", used: 88, color: "#f59e0b", icon: "🍽️" },
-  { label: "Groceries", used: 42, color: "#10b981", icon: "🛒" },
-  { label: "Subscriptions", used: 55, color: "#8b5cf6", icon: "📱" },
+const INIT_BUDGET = [
+  {
+    label: "Transport",
+    used: 68,
+    color: "#6366f1",
+    icon: "🚗",
+    spent: 5440,
+    limit: 8000,
+  },
+  {
+    label: "Dining",
+    used: 88,
+    color: "#f59e0b",
+    icon: "🍽️",
+    spent: 4400,
+    limit: 5000,
+  },
+  {
+    label: "Groceries",
+    used: 42,
+    color: "#10b981",
+    icon: "🛒",
+    spent: 3090,
+    limit: 7500,
+  },
+  {
+    label: "Subscriptions",
+    used: 55,
+    color: "#8b5cf6",
+    icon: "📱",
+    spent: 1650,
+    limit: 3000,
+  },
 ];
 
-const ALERTS = [
+const INIT_ALERTS = [
   {
     id: 1,
     type: "danger",
     icon: "🔥",
     title: "Fuel spend 40% above average",
     sub: "You spent ₹4,500 — usual is ₹3,200. Want to review?",
-    dismissed: false,
   },
   {
     id: 2,
@@ -97,31 +167,50 @@ const ALERTS = [
     icon: "⚠️",
     title: "Dining budget almost full",
     sub: "₹4,400 used of ₹5,000 — only ₹600 left.",
-    dismissed: false,
   },
 ];
 
-const VITA_RESPONSES = {
+const FALLBACK_REPLIES = {
   "this month's balance":
-    "Your balance this month is ₹27,680. You started June with ₹0 and received ₹82,000 salary. Total expenses so far are ₹54,320. You're saving at 18% — great going, Rahul! 💪",
+    "Your balance this month is ₹27,680. You received ₹82,000 salary and spent ₹54,320 so far. Saving at 18% — great going, Rahul! 💪",
   "top spending":
-    "Your top spending categories this month:\n1. 🍽️ Dining — ₹4,400 (88% of budget)\n2. 🚗 Transport — ₹5,440 (68% of budget)\n3. 🛒 Groceries — ₹3,090 (42% of budget)\n4. 📱 Subscriptions — ₹1,650 (55% of budget)\n\nDining is almost at its limit — watch out!",
+    "Top spending this month:\n1. 🍽️ Dining — ₹4,400 (88% of budget)\n2. 🚗 Transport — ₹5,440 (68%)\n3. 🛒 Groceries — ₹3,090 (42%)\n4. 📱 Subscriptions — ₹1,650 (55%)\n\nWatch that Dining budget!",
   "savings check":
-    "Here's your savings snapshot:\n\n💰 Net savings: ₹27,680\n📈 Savings rate: 18%\n🎯 Goal: 20% rate\n\nYou're 2% short of your target. Cutting ₹1,640 from discretionary spending this month would hit the goal!",
-  default:
-    "Got it! I've logged that. Is there anything else you'd like to track or review? You can ask about your balance, spending breakdown, or savings anytime. 😊",
+    "Savings snapshot:\n💰 Net savings: ₹27,680\n📈 Rate: 18%\n🎯 Goal: 20%\n\nYou're 2% short. Cut ₹1,640 from extras to hit your target!",
 };
 
-function formatAmount(n) {
-  return (n < 0 ? "−₹" : "₹") + Math.abs(n).toLocaleString("en-IN");
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+const fmt = (n) => (n < 0 ? "−₹" : "₹") + Math.abs(n).toLocaleString("en-IN");
+
+async function api(path, opts = {}) {
+  const res = await fetch(API_BASE + path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
+const BUDGET_COLORS = {
+  Transport: "#6366f1",
+  Dining: "#f59e0b",
+  Groceries: "#10b981",
+  Subscriptions: "#8b5cf6",
+};
+const BUDGET_ICONS = {
+  Transport: "🚗",
+  Dining: "🍽️",
+  Groceries: "🛒",
+  Subscriptions: "📱",
+};
+
+// ─── SUB-COMPONENTS ───────────────────────────────────────────────────────────
 function HealthGauge({ score }) {
   const r = 54,
     cx = 70,
-    cy = 70;
-  const circ = Math.PI * r;
-  const dash = (score / 100) * circ;
+    cy = 70,
+    circ = Math.PI * r;
+  const color = score >= 75 ? "#10b981" : score >= 50 ? "#6366f1" : "#ef4444";
   return (
     <svg width="140" height="90" viewBox="0 0 140 90">
       <path
@@ -134,11 +223,11 @@ function HealthGauge({ score }) {
       <path
         d={`M${cx - r},${cy} A${r},${r} 0 0,1 ${cx + r},${cy}`}
         fill="none"
-        stroke="#6366f1"
+        stroke={color}
         strokeWidth="10"
         strokeLinecap="round"
-        strokeDasharray={`${dash} ${circ}`}
-        style={{ transition: "stroke-dasharray 1s ease" }}
+        strokeDasharray={`${(score / 100) * circ} ${circ}`}
+        style={{ transition: "stroke-dasharray 1.2s ease" }}
       />
       <text
         x={cx}
@@ -154,38 +243,37 @@ function HealthGauge({ score }) {
   );
 }
 
-function BudgetBar({ label, used, color, icon }) {
-  const [hovered, setHovered] = useState(false);
+function BudgetBar({ label, used, color, icon, spent, limit }) {
+  const [hov, setHov] = useState(false);
   const over = used >= 80;
   return (
     <div
       style={{ marginBottom: 10 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
     >
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 4,
+          marginBottom: 3,
         }}
       >
         <span
           style={{
-            fontSize: 13,
+            fontSize: 12,
             color: "#6b7280",
             display: "flex",
             alignItems: "center",
-            gap: 5,
+            gap: 4,
           }}
         >
-          <span>{icon}</span>
-          {label}
+          {icon} {label}
         </span>
         <span
           style={{
-            fontSize: 13,
+            fontSize: 12,
             fontWeight: 600,
             color: over ? "#ef4444" : "#111827",
           }}
@@ -204,69 +292,278 @@ function BudgetBar({ label, used, color, icon }) {
         <div
           style={{
             height: "100%",
-            width: `${used}%`,
+            width: `${Math.min(used, 100)}%`,
             borderRadius: 99,
-            background: hovered ? (over ? "#dc2626" : "#6366f1") : color,
-            transition: "width 0.8s ease, background 0.2s",
+            background: hov ? (over ? "#dc2626" : "#6366f1") : color,
+            transition: "width 0.8s ease,background 0.2s",
           }}
         />
+      </div>
+      {hov && spent != null && (
+        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>
+          ₹{spent?.toLocaleString("en-IN")} of ₹{limit?.toLocaleString("en-IN")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TypingDots() {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          background: "#ede9fe",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 12,
+        }}
+      >
+        ₹
+      </div>
+      <div
+        style={{
+          background: "#f9f9fb",
+          border: "1px solid #ede9fe",
+          borderRadius: "14px 14px 14px 4px",
+          padding: "12px 16px",
+          display: "flex",
+          gap: 5,
+          alignItems: "center",
+        }}
+      >
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: "#6366f1",
+              opacity: 0.4,
+              animation: `vmdot 1.2s ease-in-out ${i * 0.2}s infinite`,
+            }}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-export default function VittaMitra() {
-  const [alerts, setAlerts] = useState(ALERTS);
-  const [chatMessages, setChatMessages] = useState([
+// ─── MIC BUTTON ───────────────────────────────────────────────────────────────
+function MicButton({ onResult, onListening }) {
+  const [listening, setListening] = useState(false);
+  const recRef = useRef(null);
+  const supported =
+    typeof window !== "undefined" &&
+    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+
+  const toggle = useCallback(() => {
+    if (!supported) {
+      alert(
+        "Speech recognition is not supported in your browser.\nPlease use Google Chrome or Microsoft Edge.",
+      );
+      return;
+    }
+    if (listening) {
+      recRef.current?.stop();
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = "en-IN";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    recRef.current = rec;
+
+    rec.onstart = () => {
+      setListening(true);
+      onListening?.(true);
+    };
+    rec.onresult = (e) => {
+      onResult(e.results[0][0].transcript);
+    };
+    rec.onerror = () => {
+      setListening(false);
+      onListening?.(false);
+    };
+    rec.onend = () => {
+      setListening(false);
+      onListening?.(false);
+    };
+    rec.start();
+  }, [listening, supported, onResult, onListening]);
+
+  return (
+    <button
+      onClick={toggle}
+      title={listening ? "Stop" : "Speak to Vita (🎙️)"}
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: "50%",
+        border: "none",
+        cursor: "pointer",
+        flexShrink: 0,
+        background: listening ? "#ef4444" : "#f3f4f6",
+        color: listening ? "#fff" : "#6b7280",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 16,
+        transition: "all 0.2s",
+        opacity: supported ? 1 : 0.45,
+        animation: listening ? "vmmic 1.2s ease-in-out infinite" : "none",
+      }}
+    >
+      {listening ? "⏹" : "🎙️"}
+    </button>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+export default function AiAssistant() {
+  const [alerts, setAlerts] = useState(INIT_ALERTS);
+  const [messages, setMessages] = useState([
     {
       from: "vita",
-      text: "Namaste! Tell me about a payment, ask about your budget, or tap the mic and speak naturally.",
-    },
-    { from: "user", text: "Paid ₹4,500 for fuel at HP pump via UPI" },
-    {
-      from: "vita",
-      text: "Got it! Logged ₹4,500 under Transport → Fuel.\n\n⚠ 40% above your usual spend.",
+      text: "Namaste Rahul! 🙏 Tell me about a payment, ask about your budget, or tap 🎙️ and speak naturally.",
     },
   ]);
   const [input, setInput] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [showLedger, setShowLedger] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [showProfile, setShowProfile] = useState(false);
-  const chatEndRef = useRef(null);
+  const [transactions, setTransactions] = useState(INIT_TRANSACTIONS);
+  const [budget, setBudget] = useState(INIT_BUDGET);
+  const [summary, setSummary] = useState({
+    income: 82000,
+    expenses: 54320,
+    savings: 27680,
+    savingsRate: 18,
+    healthScore: 72,
+  });
+  const [backendUp, setBackendUp] = useState(null);
+
+  const chatEnd = useRef(null);
+  const inputRef = useRef(null);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+    chatEnd.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isTyping]);
 
-  const sendMessage = (text) => {
-    const msg = text || input.trim();
+  // Check backend & load live data
+  useEffect(() => {
+    (async () => {
+      try {
+        await api("/health");
+        setBackendUp(true);
+        const [txRes, sumRes] = await Promise.all([
+          api("/transactions"),
+          api("/summary"),
+        ]);
+        if (txRes.transactions?.length) setTransactions(txRes.transactions);
+        if (sumRes.budgetUsage?.length) {
+          setBudget(
+            sumRes.budgetUsage.map((b) => ({
+              ...b,
+              color: BUDGET_COLORS[b.label] || "#6366f1",
+              icon: BUDGET_ICONS[b.label] || "📦",
+            })),
+          );
+        }
+        if (sumRes.income) setSummary(sumRes);
+      } catch {
+        setBackendUp(false);
+      }
+    })();
+  }, []);
+
+  const addMsg = (from, text) =>
+    setMessages((prev) => [...prev, { from, text }]);
+
+  const sendMessage = async (overrideText) => {
+    const msg = (overrideText ?? input).trim();
     if (!msg) return;
     setInput("");
-    setChatMessages((prev) => [...prev, { from: "user", text: msg }]);
-    setTimeout(() => {
-      const key = msg.toLowerCase();
-      const reply = VITA_RESPONSES[key] || VITA_RESPONSES["default"];
-      setChatMessages((prev) => [...prev, { from: "vita", text: reply }]);
-    }, 700);
+    addMsg("user", msg);
+    setIsTyping(true);
+
+    try {
+      if (backendUp) {
+        const isExpense =
+          /paid|spent|bought|purchased|₹|\d+\s*(rs|rupee)/i.test(msg);
+        let warning = "";
+
+        if (isExpense) {
+          try {
+            const logRes = await api("/log-expense", {
+              method: "POST",
+              body: JSON.stringify({ text: msg }),
+            });
+            if (logRes.transaction)
+              setTransactions((prev) => [logRes.transaction, ...prev]);
+            if (logRes.budgetWarning) warning = "\n\n" + logRes.budgetWarning;
+          } catch (e) {
+            /* log silently */
+          }
+        }
+
+        const chatRes = await api("/chat", {
+          method: "POST",
+          body: JSON.stringify({ message: msg, history: messages.slice(-8) }),
+        });
+        setIsTyping(false);
+        addMsg("vita", chatRes.reply + warning);
+      } else {
+        // Offline fallback
+        await new Promise((r) => setTimeout(r, 800));
+        const key = msg.toLowerCase();
+        const reply =
+          FALLBACK_REPLIES[key] ||
+          `Got it! I noted "${msg}".\n\n(Vita's full AI is offline — start server.js for Claude responses.) 💡`;
+        setIsTyping(false);
+        addMsg("vita", reply);
+      }
+    } catch {
+      setIsTyping(false);
+      addMsg("vita", "Sorry, something went wrong. Please try again. 🙏");
+    }
   };
 
-  const dismissAlert = (id) =>
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
+  const handleMicResult = (transcript) => {
+    setInput(transcript);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
 
   return (
     <div
       style={{
         minHeight: "100vh",
         background: "#f5f3ff",
-        fontFamily: "'DM Sans', sans-serif",
+        fontFamily: "'DM Sans',sans-serif",
       }}
     >
       <link
         href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap"
         rel="stylesheet"
       />
+      <style>{`
+        @keyframes vmdot  { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
+        @keyframes vmmic  { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.4)} 50%{box-shadow:0 0 0 8px rgba(239,68,68,0)} }
+        @keyframes vmfade { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:translateY(0)} }
+        .vmanim { animation:vmfade 0.25s ease both; }
+        *{box-sizing:border-box;}
+        ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#e5e7eb;border-radius:4px}
+      `}</style>
 
-      {/* Header */}
+      {/* ── HEADER ── */}
       <div
         style={{
           background: "#fff",
@@ -313,22 +610,21 @@ export default function VittaMitra() {
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span
-            style={{
-              background: "#ecfdf5",
-              color: "#059669",
-              fontSize: 12,
-              fontWeight: 600,
-              padding: "4px 10px",
-              borderRadius: 99,
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            ✓ Synced
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {backendUp !== null && (
+            <span
+              style={{
+                background: backendUp ? "#ecfdf5" : "#fef2f2",
+                color: backendUp ? "#059669" : "#dc2626",
+                fontSize: 11,
+                fontWeight: 600,
+                padding: "3px 9px",
+                borderRadius: 99,
+              }}
+            >
+              {backendUp ? "✓ AI Online" : "⚠ Offline mode"}
+            </span>
+          )}
           <span
             style={{
               background: "#f3f4f6",
@@ -342,7 +638,7 @@ export default function VittaMitra() {
             June 2025
           </span>
           <button
-            onClick={() => setShowProfile(!showProfile)}
+            onClick={() => setShowProfile((p) => !p)}
             style={{
               width: 34,
               height: 34,
@@ -363,105 +659,114 @@ export default function VittaMitra() {
         </div>
       </div>
 
-      {/* Profile Dropdown */}
+      {/* ── PROFILE DROPDOWN ── */}
       {showProfile && (
-        <div
-          style={{
-            position: "fixed",
-            top: 68,
-            right: 16,
-            background: "#fff",
-            border: "1px solid #e5e7eb",
-            borderRadius: 14,
-            padding: 16,
-            width: 220,
-            zIndex: 100,
-            boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
-          }}
-        >
+        <>
+          <div
+            onClick={() => setShowProfile(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 98 }}
+          />
           <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              marginBottom: 12,
-              paddingBottom: 12,
-              borderBottom: "1px solid #f3f4f6",
+              position: "fixed",
+              top: 68,
+              right: 16,
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 14,
+              padding: 16,
+              width: 220,
+              zIndex: 99,
+              boxShadow: "0 4px 20px rgba(0,0,0,.1)",
             }}
           >
             <div
               style={{
-                width: 40,
-                height: 40,
-                borderRadius: "50%",
-                background: "#ede9fe",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center",
-                fontWeight: 700,
-                color: "#6366f1",
+                gap: 10,
+                marginBottom: 12,
+                paddingBottom: 12,
+                borderBottom: "1px solid #f3f4f6",
               }}
             >
-              R
-            </div>
-            <div>
-              <div style={{ fontWeight: 600, color: "#111827", fontSize: 14 }}>
-                Rahul Sharma
+              <div
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: "50%",
+                  background: "#ede9fe",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontWeight: 700,
+                  color: "#6366f1",
+                  fontSize: 16,
+                }}
+              >
+                R
               </div>
-              <div style={{ fontSize: 12, color: "#9ca3af" }}>
-                rahul@email.com
+              <div>
+                <div
+                  style={{ fontWeight: 600, color: "#111827", fontSize: 14 }}
+                >
+                  Rahul Sharma
+                </div>
+                <div style={{ fontSize: 12, color: "#9ca3af" }}>
+                  rahul@email.com
+                </div>
               </div>
             </div>
+            {[
+              "Account Settings",
+              "Linked Accounts",
+              "Notifications",
+              "Export Data",
+              "Sign Out",
+            ].map((item) => (
+              <div
+                key={item}
+                onClick={() => setShowProfile(false)}
+                style={{
+                  padding: "8px 6px",
+                  fontSize: 13,
+                  color: item === "Sign Out" ? "#ef4444" : "#374151",
+                  cursor: "pointer",
+                  borderRadius: 6,
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "#f9fafb")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = "transparent")
+                }
+              >
+                {item}
+              </div>
+            ))}
           </div>
-          {[
-            "Account Settings",
-            "Linked Accounts",
-            "Notifications",
-            "Export Data",
-            "Sign Out",
-          ].map((item) => (
-            <div
-              key={item}
-              onClick={() => setShowProfile(false)}
-              style={{
-                padding: "8px 4px",
-                fontSize: 13,
-                color: item === "Sign Out" ? "#ef4444" : "#374151",
-                cursor: "pointer",
-                borderRadius: 6,
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.background = "#f9fafb")
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.background = "transparent")
-              }
-            >
-              {item}
-            </div>
-          ))}
-        </div>
+        </>
       )}
 
-      {/* Alerts */}
+      {/* ── ALERTS ── */}
       <div
         style={{
-          padding: "12px 16px",
+          padding: "12px 16px 4px",
           display: "flex",
           flexDirection: "column",
           gap: 8,
         }}
       >
-        {alerts.map((alert) => (
+        {alerts.map((a) => (
           <div
-            key={alert.id}
+            key={a.id}
+            className="vmanim"
             style={{
               background: "#fff",
-              border: `1px solid ${alert.type === "danger" ? "#fecaca" : "#fde68a"}`,
-              borderLeft: `4px solid ${alert.type === "danger" ? "#ef4444" : "#f59e0b"}`,
+              border: `1px solid ${a.type === "danger" ? "#fecaca" : "#fde68a"}`,
+              borderLeft: `4px solid ${a.type === "danger" ? "#ef4444" : "#f59e0b"}`,
               borderRadius: 12,
-              padding: "12px 16px",
+              padding: "11px 14px",
               display: "flex",
               alignItems: "flex-start",
               justifyContent: "space-between",
@@ -469,28 +774,29 @@ export default function VittaMitra() {
             }}
           >
             <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-              <span style={{ fontSize: 18 }}>{alert.icon}</span>
+              <span style={{ fontSize: 17 }}>{a.icon}</span>
               <div>
                 <div
-                  style={{ fontWeight: 600, color: "#111827", fontSize: 14 }}
+                  style={{ fontWeight: 600, color: "#111827", fontSize: 13 }}
                 >
-                  {alert.title}
+                  {a.title}
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  {alert.sub}
+                  {a.sub}
                 </div>
               </div>
             </div>
             <button
-              onClick={() => dismissAlert(alert.id)}
+              onClick={() => setAlerts((p) => p.filter((x) => x.id !== a.id))}
               style={{
                 background: "none",
                 border: "none",
                 cursor: "pointer",
                 color: "#9ca3af",
-                fontSize: 18,
-                padding: 0,
+                fontSize: 20,
+                padding: "0 4px",
                 lineHeight: 1,
+                flexShrink: 0,
               }}
             >
               ×
@@ -499,16 +805,16 @@ export default function VittaMitra() {
         ))}
       </div>
 
-      {/* Main Grid */}
+      {/* ── MAIN GRID ── */}
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
           gap: 12,
-          padding: "0 16px 16px",
+          padding: "8px 16px 90px",
         }}
       >
-        {/* Left: Vita Chat */}
+        {/* LEFT: Vita Chat */}
         <div
           style={{
             background: "#fff",
@@ -517,8 +823,10 @@ export default function VittaMitra() {
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
+            minHeight: 520,
           }}
         >
+          {/* Chat header */}
           <div
             style={{
               padding: "12px 16px",
@@ -526,6 +834,7 @@ export default function VittaMitra() {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
+              background: "#fafafa",
             }}
           >
             <div
@@ -538,8 +847,7 @@ export default function VittaMitra() {
                 fontSize: 14,
               }}
             >
-              <span style={{ fontSize: 16 }}>✦</span> Vita — your money
-              assistant
+              <span>✦</span> Vita — your money assistant
             </div>
             <div
               style={{
@@ -547,7 +855,7 @@ export default function VittaMitra() {
                 alignItems: "center",
                 gap: 5,
                 fontSize: 12,
-                color: "#10b981",
+                color: isListening ? "#ef4444" : "#10b981",
                 fontWeight: 500,
               }}
             >
@@ -556,10 +864,13 @@ export default function VittaMitra() {
                   width: 7,
                   height: 7,
                   borderRadius: "50%",
-                  background: "#10b981",
+                  background: isListening ? "#ef4444" : "#10b981",
+                  animation: isListening
+                    ? "vmmic 1.2s ease-in-out infinite"
+                    : "none",
                 }}
-              />{" "}
-              Online
+              />
+              {isListening ? "Listening…" : "Online"}
             </div>
           </div>
 
@@ -568,25 +879,25 @@ export default function VittaMitra() {
             style={{
               flex: 1,
               overflowY: "auto",
-              padding: "12px 14px",
+              padding: "14px",
               display: "flex",
               flexDirection: "column",
               gap: 12,
-              minHeight: 240,
-              maxHeight: 320,
+              maxHeight: 340,
             }}
           >
-            {chatMessages.map((msg, i) => (
+            {messages.map((m, i) => (
               <div
                 key={i}
+                className="vmanim"
                 style={{
                   display: "flex",
-                  flexDirection: msg.from === "user" ? "row-reverse" : "row",
+                  flexDirection: m.from === "user" ? "row-reverse" : "row",
                   alignItems: "flex-end",
                   gap: 8,
                 }}
               >
-                {msg.from === "vita" && (
+                {m.from === "vita" && (
                   <div
                     style={{
                       width: 28,
@@ -596,7 +907,7 @@ export default function VittaMitra() {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      fontSize: 13,
+                      fontSize: 12,
                       flexShrink: 0,
                     }}
                   >
@@ -605,23 +916,23 @@ export default function VittaMitra() {
                 )}
                 <div
                   style={{
-                    background: msg.from === "user" ? "#6366f1" : "#f9f9fb",
-                    color: msg.from === "user" ? "#fff" : "#1e1b4b",
+                    background: m.from === "user" ? "#6366f1" : "#f9f9fb",
+                    color: m.from === "user" ? "#fff" : "#1e1b4b",
                     borderRadius:
-                      msg.from === "user"
+                      m.from === "user"
                         ? "14px 14px 4px 14px"
                         : "14px 14px 14px 4px",
                     padding: "10px 13px",
                     fontSize: 13,
-                    lineHeight: 1.5,
+                    lineHeight: 1.55,
                     maxWidth: "80%",
-                    border: msg.from === "vita" ? "1px solid #ede9fe" : "none",
+                    border: m.from === "vita" ? "1px solid #ede9fe" : "none",
                     whiteSpace: "pre-line",
                   }}
                 >
-                  {msg.text}
+                  {m.text}
                 </div>
-                {msg.from === "user" && (
+                {m.from === "user" && (
                   <div
                     style={{
                       width: 28,
@@ -631,9 +942,9 @@ export default function VittaMitra() {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      fontSize: 12,
                       fontWeight: 700,
                       color: "#fff",
+                      fontSize: 12,
                       flexShrink: 0,
                     }}
                   >
@@ -642,33 +953,35 @@ export default function VittaMitra() {
                 )}
               </div>
             ))}
-            <div ref={chatEndRef} />
+            {isTyping && <TypingDots />}
+            <div ref={chatEnd} />
           </div>
 
-          {/* Quick Replies */}
+          {/* Quick replies */}
           <div
             style={{
               padding: "8px 14px",
               display: "flex",
               gap: 6,
               flexWrap: "wrap",
+              borderTop: "1px solid #f9f9fb",
             }}
           >
             {["This month's balance", "Top spending", "Savings check"].map(
               (q) => (
                 <button
                   key={q}
-                  onClick={() => sendMessage(q.toLowerCase())}
+                  onClick={() => sendMessage(q)}
                   style={{
                     background: "#f3f4f6",
                     border: "1px solid #e5e7eb",
                     borderRadius: 99,
-                    padding: "5px 12px",
-                    fontSize: 12,
+                    padding: "4px 11px",
+                    fontSize: 11,
                     color: "#374151",
                     cursor: "pointer",
                     fontFamily: "inherit",
-                    transition: "all 0.15s",
+                    transition: "all .15s",
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.background = "#ede9fe";
@@ -685,30 +998,39 @@ export default function VittaMitra() {
             )}
           </div>
 
-          {/* Input */}
+          {/* Input row with MIC button */}
           <div
             style={{
               padding: "10px 14px",
               borderTop: "1px solid #f3f4f6",
               display: "flex",
               gap: 8,
+              alignItems: "center",
             }}
           >
+            <MicButton
+              onResult={handleMicResult}
+              onListening={setIsListening}
+            />
             <input
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-              placeholder="Message Vita..."
+              onKeyDown={(e) =>
+                e.key === "Enter" && !e.shiftKey && sendMessage()
+              }
+              placeholder={isListening ? "Listening…" : "Message Vita..."}
               style={{
                 flex: 1,
-                background: "#f9f9fb",
-                border: "1px solid #e5e7eb",
+                background: isListening ? "#fff8f8" : "#f9f9fb",
+                border: `1px solid ${isListening ? "#fca5a5" : "#e5e7eb"}`,
                 borderRadius: 99,
                 padding: "9px 16px",
                 fontSize: 13,
                 color: "#111827",
                 outline: "none",
                 fontFamily: "inherit",
+                transition: "all .2s",
               }}
             />
             <button
@@ -717,14 +1039,16 @@ export default function VittaMitra() {
                 width: 36,
                 height: 36,
                 borderRadius: "50%",
-                background: "#6366f1",
                 border: "none",
+                background: input.trim() ? "#6366f1" : "#e5e7eb",
                 color: "#fff",
-                cursor: "pointer",
-                fontSize: 16,
+                cursor: input.trim() ? "pointer" : "default",
+                fontSize: 14,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
+                transition: "background .2s",
+                flexShrink: 0,
               }}
             >
               ↑
@@ -732,12 +1056,12 @@ export default function VittaMitra() {
           </div>
         </div>
 
-        {/* Right: Dashboard */}
+        {/* RIGHT: Dashboard */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {/* Greeting */}
           <div
             style={{
-              background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+              background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%)",
               borderRadius: 16,
               padding: "16px 18px",
               color: "#fff",
@@ -756,22 +1080,22 @@ export default function VittaMitra() {
             </div>
             <div
               style={{
-                width: 38,
-                height: 38,
+                width: 40,
+                height: 40,
                 borderRadius: "50%",
-                background: "rgba(255,255,255,0.2)",
+                background: "rgba(255,255,255,.2)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 fontWeight: 700,
-                fontSize: 15,
+                fontSize: 16,
               }}
             >
               R
             </div>
           </div>
 
-          {/* Stat Cards */}
+          {/* Stat cards */}
           <div
             style={{
               display: "grid",
@@ -782,21 +1106,21 @@ export default function VittaMitra() {
             {[
               {
                 label: "Monthly income",
-                value: "₹82,000",
+                value: fmt(summary.income),
                 badge: "↑ 4.2% vs last month",
-                badgeColor: "#10b981",
+                bc: "#10b981",
               },
               {
                 label: "Total expenses",
-                value: "₹54,320",
+                value: fmt(summary.expenses),
                 badge: "↑ 12% vs last month",
-                badgeColor: "#ef4444",
+                bc: "#ef4444",
               },
               {
                 label: "Net savings",
-                value: "₹27,680",
-                badge: "✓ 18% savings rate",
-                badgeColor: "#6366f1",
+                value: fmt(summary.savings),
+                badge: `✓ ${summary.savingsRate}% savings rate`,
+                bc: "#6366f1",
               },
             ].map((c) => (
               <div
@@ -805,23 +1129,30 @@ export default function VittaMitra() {
                   background: "#fff",
                   borderRadius: 12,
                   border: "1px solid #e5e7eb",
-                  padding: "12px 12px 10px",
+                  padding: "12px 10px 10px",
+                  cursor: "default",
                 }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.borderColor = "#c7d2fe")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.borderColor = "#e5e7eb")
+                }
               >
                 <div
-                  style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4 }}
+                  style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}
                 >
                   {c.label}
                 </div>
                 <div
-                  style={{ fontWeight: 700, fontSize: 17, color: "#111827" }}
+                  style={{ fontWeight: 700, fontSize: 16, color: "#111827" }}
                 >
                   {c.value}
                 </div>
                 <div
                   style={{
                     fontSize: 10,
-                    color: c.badgeColor,
+                    color: c.bc,
                     marginTop: 4,
                     fontWeight: 500,
                   }}
@@ -832,7 +1163,7 @@ export default function VittaMitra() {
             ))}
           </div>
 
-          {/* Health + Budget */}
+          {/* Health gauge + Budget bars */}
           <div
             style={{
               display: "grid",
@@ -845,13 +1176,13 @@ export default function VittaMitra() {
                 background: "#fff",
                 borderRadius: 12,
                 border: "1px solid #e5e7eb",
-                padding: "14px 12px",
+                padding: "14px 10px",
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
               }}
             >
-              <HealthGauge score={72} />
+              <HealthGauge score={summary.healthScore || 72} />
               <div
                 style={{
                   fontWeight: 600,
@@ -866,20 +1197,19 @@ export default function VittaMitra() {
                 style={{
                   fontSize: 11,
                   color: "#10b981",
-                  marginTop: 2,
+                  marginTop: 3,
                   fontWeight: 500,
                 }}
               >
                 👍 Good standing
               </div>
             </div>
-
             <div
               style={{
                 background: "#fff",
                 borderRadius: 12,
                 border: "1px solid #e5e7eb",
-                padding: "14px 14px",
+                padding: "14px",
               }}
             >
               <div
@@ -892,13 +1222,13 @@ export default function VittaMitra() {
               >
                 Budget usage
               </div>
-              {BUDGET.map((b) => (
+              {budget.map((b) => (
                 <BudgetBar key={b.label} {...b} />
               ))}
             </div>
           </div>
 
-          {/* Transaction Ledger Toggle */}
+          {/* Transaction ledger */}
           <div
             style={{
               background: "#fff",
@@ -908,12 +1238,12 @@ export default function VittaMitra() {
             }}
           >
             <button
-              onClick={() => setShowLedger(!showLedger)}
+              onClick={() => setShowLedger((p) => !p)}
               style={{
                 width: "100%",
                 background: "none",
                 border: "none",
-                padding: "14px 16px",
+                padding: "13px 16px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
@@ -925,12 +1255,12 @@ export default function VittaMitra() {
                 <span style={{ fontSize: 16 }}>🗒️</span>
                 <div style={{ textAlign: "left" }}>
                   <div
-                    style={{ fontWeight: 600, color: "#1e1b4b", fontSize: 14 }}
+                    style={{ fontWeight: 600, color: "#1e1b4b", fontSize: 13 }}
                   >
                     Transaction ledger
                   </div>
                   <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                    8 transactions · tap to view
+                    {transactions.length} transactions · tap to view
                   </div>
                 </div>
               </div>
@@ -938,8 +1268,9 @@ export default function VittaMitra() {
                 style={{
                   color: "#9ca3af",
                   fontSize: 18,
-                  transform: showLedger ? "rotate(180deg)" : "rotate(0deg)",
-                  transition: "transform 0.2s",
+                  display: "inline-block",
+                  transform: showLedger ? "rotate(180deg)" : "rotate(0)",
+                  transition: "transform .2s",
                 }}
               >
                 ⌄
@@ -947,8 +1278,14 @@ export default function VittaMitra() {
             </button>
 
             {showLedger && (
-              <div style={{ borderTop: "1px solid #f3f4f6" }}>
-                {TRANSACTIONS.map((tx, i) => (
+              <div
+                style={{
+                  borderTop: "1px solid #f3f4f6",
+                  maxHeight: 280,
+                  overflowY: "auto",
+                }}
+              >
+                {transactions.map((tx, i) => (
                   <div
                     key={tx.id}
                     style={{
@@ -957,11 +1294,11 @@ export default function VittaMitra() {
                       alignItems: "center",
                       justifyContent: "space-between",
                       borderBottom:
-                        i < TRANSACTIONS.length - 1
+                        i < transactions.length - 1
                           ? "1px solid #f9fafb"
                           : "none",
                       cursor: "pointer",
-                      transition: "background 0.1s",
+                      transition: "background .1s",
                     }}
                     onMouseEnter={(e) =>
                       (e.currentTarget.style.background = "#fafaf9")
@@ -975,14 +1312,14 @@ export default function VittaMitra() {
                     >
                       <div
                         style={{
-                          width: 34,
-                          height: 34,
-                          borderRadius: 10,
+                          width: 32,
+                          height: 32,
+                          borderRadius: 9,
                           background: "#f3f4f6",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
-                          fontSize: 16,
+                          fontSize: 15,
                         }}
                       >
                         {tx.icon}
@@ -992,24 +1329,43 @@ export default function VittaMitra() {
                           style={{
                             fontWeight: 500,
                             color: "#111827",
-                            fontSize: 13,
+                            fontSize: 12,
                           }}
                         >
                           {tx.desc}
                         </div>
-                        <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                          {tx.category} · {tx.date}, {tx.time}
+                        <div style={{ fontSize: 10, color: "#9ca3af" }}>
+                          {tx.category}
+                          {tx.subCategory ? ` → ${tx.subCategory}` : ""} ·{" "}
+                          {String(tx.date || "")
+                            .slice(5)
+                            .replace("-", "/")}{" "}
+                          {tx.time}
                         </div>
                       </div>
                     </div>
                     <div
                       style={{
-                        fontWeight: 600,
-                        fontSize: 14,
-                        color: tx.amount > 0 ? "#10b981" : "#1e1b4b",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-end",
+                        gap: 2,
                       }}
                     >
-                      {formatAmount(tx.amount)}
+                      <div
+                        style={{
+                          fontWeight: 600,
+                          fontSize: 13,
+                          color: tx.amount > 0 ? "#10b981" : "#1e1b4b",
+                        }}
+                      >
+                        {fmt(tx.amount)}
+                      </div>
+                      {tx.paymentMode && (
+                        <div style={{ fontSize: 9, color: "#9ca3af" }}>
+                          {tx.paymentMode}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1019,16 +1375,19 @@ export default function VittaMitra() {
         </div>
       </div>
 
-      {/* Bottom Nav */}
+      {/* ── BOTTOM NAV ── */}
       <div
         style={{
           background: "#fff",
           borderTop: "1px solid #e5e7eb",
-          padding: "10px 0 16px",
+          padding: "10px 0 14px",
           display: "flex",
           justifyContent: "space-around",
-          position: "sticky",
+          position: "fixed",
           bottom: 0,
+          left: 0,
+          right: 0,
+          zIndex: 40,
         }}
       >
         {[
@@ -1045,21 +1404,21 @@ export default function VittaMitra() {
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              gap: 3,
+              gap: 2,
               background: "none",
               border: "none",
               cursor: "pointer",
               padding: "4px 12px",
               borderRadius: 10,
-              transition: "background 0.15s",
               fontFamily: "inherit",
+              transition: "background .15s",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
             onMouseLeave={(e) =>
               (e.currentTarget.style.background = "transparent")
             }
           >
-            <span style={{ fontSize: 20 }}>{tab.icon}</span>
+            <span style={{ fontSize: 19 }}>{tab.icon}</span>
             <span
               style={{
                 fontSize: 10,
@@ -1072,7 +1431,7 @@ export default function VittaMitra() {
             {activeTab === tab.id && (
               <div
                 style={{
-                  width: 18,
+                  width: 16,
                   height: 2,
                   borderRadius: 99,
                   background: "#6366f1",
