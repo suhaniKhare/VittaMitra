@@ -16,113 +16,51 @@
  *   GET  /api/health        → Server health check
  */
 
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const Anthropic = require("@anthropic-ai/sdk");
+import Anthropic from "@anthropic-ai/sdk";
+import cors from "cors";
+import dotenv from "dotenv";
+import express from "express";
+import connectDB from "./config/db.js";
+import Transaction from "./models/Transaction.js";
+import ledgerRoutes from "./routes/ledgerRoutes.js";
+import { exec } from "child_process";
+
+dotenv.config();
+
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-app.use(cors({ origin: ["http://localhost:3000", "http://localhost:5173"] }));
+app.use(cors());
 app.use(express.json());
 
-const client = new Anthropic.default({
+app.use("/api/ledger", ledgerRoutes);
+
+const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// ─── In-memory store (replace with DB in production) ─────────────────────────
-let transactions = [
-  {
-    id: 1,
-    desc: "HP Fuel Pump",
-    category: "Transport",
-    subCategory: "Fuel",
-    amount: -4500,
-    date: "2025-06-09",
-    time: "9:02 AM",
-    icon: "⛽",
-    paymentMode: "UPI",
-  },
-  {
-    id: 2,
-    desc: "Swiggy Dinner",
-    category: "Dining",
-    subCategory: "Delivery",
-    amount: -850,
-    date: "2025-06-08",
-    time: "8:45 PM",
-    icon: "🍔",
-    paymentMode: "UPI",
-  },
-  {
-    id: 3,
-    desc: "Salary Credit",
-    category: "Income",
-    subCategory: null,
-    amount: 82000,
-    date: "2025-06-01",
-    time: "9:00 AM",
-    icon: "💼",
-    paymentMode: "Bank Transfer",
-  },
-  {
-    id: 4,
-    desc: "Amazon Fresh",
-    category: "Groceries",
-    subCategory: null,
-    amount: -1200,
-    date: "2025-06-07",
-    time: "3:10 PM",
-    icon: "🛒",
-    paymentMode: "Card",
-  },
-  {
-    id: 5,
-    desc: "Netflix",
-    category: "Subscriptions",
-    subCategory: null,
-    amount: -649,
-    date: "2025-06-05",
-    time: "12:00 AM",
-    icon: "📺",
-    paymentMode: "Card",
-  },
-  {
-    id: 6,
-    desc: "Cafe Coffee Day",
-    category: "Dining",
-    subCategory: "Cafe",
-    amount: -320,
-    date: "2025-06-06",
-    time: "11:20 AM",
-    icon: "☕",
-    paymentMode: "UPI",
-  },
-  {
-    id: 7,
-    desc: "Ola Cab",
-    category: "Transport",
-    subCategory: "Cab",
-    amount: -250,
-    date: "2025-06-07",
-    time: "7:30 AM",
-    icon: "🚕",
-    paymentMode: "Wallet",
-  },
-  {
-    id: 8,
-    desc: "Big Basket",
-    category: "Groceries",
-    subCategory: null,
-    amount: -1890,
-    date: "2025-06-04",
-    time: "5:15 PM",
-    icon: "🧺",
-    paymentMode: "UPI",
-  },
-];
+app.get("/api/test-db", async (req, res) => {
+  try {
+    const tx = await Transaction.create({
+      userId: "demo-user",
+      date: "2026-06-09",
+      type: "expense",
+      category: "Food",
+      amount: 100,
+      mode: "UPI",
+      description: "Pizza"
+    });
 
+    res.json(tx);
+  } catch (error) {
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// ─── Budget configuration ────────────────────────────────────────────────────
 const budgetLimits = {
   Transport: 8000,
   Dining: 5000,
@@ -234,22 +172,42 @@ Return ONLY the JSON, no explanation.`;
     }
 
     const now = new Date();
-    const newTx = {
-      id: transactions.length + 1,
-      ...parsed,
+    
+    // Save to MongoDB
+    const tx = new Transaction({
+      userId: "demo-user",
       date: now.toISOString().split("T")[0],
+      type: parsed.amount < 0 ? "expense" : "income",
+      category: parsed.category,
+      source: parsed.desc,
+      amount: Math.abs(parsed.amount),
+      mode: parsed.paymentMode || "Cash",
+      description: parsed.desc
+    });
+    await tx.save();
+
+    // Map back for the frontend
+    const newTxFormatted = {
+      id: tx._id,
+      desc: tx.description,
+      category: tx.category,
+      subCategory: parsed.subCategory,
+      amount: parsed.amount,
+      date: tx.date,
       time: now.toLocaleTimeString("en-IN", {
         hour: "2-digit",
         minute: "2-digit",
       }),
+      icon: parsed.icon,
+      paymentMode: tx.mode
     };
 
-    transactions.unshift(newTx);
-
-    // Check budget impact
-    const catSpend = transactions
-      .filter((t) => t.category === parsed.category && t.amount < 0)
-      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+    // Calculate dynamic budget warning from MongoDB
+    const userTransactions = await Transaction.find({ userId: "demo-user" });
+    
+    const catSpend = userTransactions
+      .filter((t) => t.category === parsed.category && t.type === "expense")
+      .reduce((sum, t) => sum + t.amount, 0);
 
     const limit = budgetLimits[parsed.category];
     const budgetWarning =
@@ -257,7 +215,7 @@ Return ONLY the JSON, no explanation.`;
         ? `⚠️ ${parsed.category} budget is now at ${Math.round((catSpend / limit) * 100)}% — ₹${(limit - catSpend).toLocaleString("en-IN")} remaining.`
         : null;
 
-    res.json({ transaction: newTx, budgetWarning });
+    res.json({ transaction: newTxFormatted, budgetWarning });
   } catch (err) {
     console.error("Log expense error:", err.message);
     res.status(500).json({ error: "Failed to log expense." });
@@ -265,55 +223,110 @@ Return ONLY the JSON, no explanation.`;
 });
 
 // ─── GET ALL TRANSACTIONS ─────────────────────────────────────────────────────
-app.get("/api/transactions", (req, res) => {
-  res.json({ transactions, total: transactions.length });
+app.get("/api/transactions", async (req, res) => {
+  try {
+    const dbTxs = await Transaction.find({ userId: "demo-user" }).sort({ createdAt: -1 });
+    const formatted = dbTxs.map(tx => {
+      const isExpense = tx.type === 'expense';
+      return {
+        id: tx._id,
+        desc: tx.description || tx.source || '',
+        category: tx.category,
+        subCategory: null,
+        amount: isExpense ? -tx.amount : tx.amount,
+        date: tx.date,
+        time: new Date(tx.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+        icon: tx.type === 'income' ? '💼' : (tx.category === 'Transport' ? '⛽' : (tx.category === 'Dining' ? '🍔' : '🛒')),
+        paymentMode: tx.mode
+      };
+    });
+    res.json({ transactions: formatted, total: formatted.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ─── MONTHLY SUMMARY ──────────────────────────────────────────────────────────
-app.get("/api/summary", (req, res) => {
-  const income = transactions
-    .filter((t) => t.amount > 0)
-    .reduce((s, t) => s + t.amount, 0);
-  const expenses = transactions
-    .filter((t) => t.amount < 0)
-    .reduce((s, t) => s + Math.abs(t.amount), 0);
-  const savings = income - expenses;
-  const savingsRate = income > 0 ? Math.round((savings / income) * 100) : 0;
+app.get("/api/summary", async (req, res) => {
+  try {
+    const dbTxs = await Transaction.find({ userId: "demo-user" });
+    const formatted = dbTxs.map(tx => ({
+      amount: tx.type === 'expense' ? -tx.amount : tx.amount,
+      category: tx.category
+    }));
 
-  const byCategory = {};
-  transactions
-    .filter((t) => t.amount < 0)
-    .forEach((t) => {
-      byCategory[t.category] =
-        (byCategory[t.category] || 0) + Math.abs(t.amount);
+    const income = formatted
+      .filter((t) => t.amount > 0)
+      .reduce((s, t) => s + t.amount, 0);
+    const expenses = formatted
+      .filter((t) => t.amount < 0)
+      .reduce((s, t) => s + Math.abs(t.amount), 0);
+    const savings = income - expenses;
+    const savingsRate = income > 0 ? Math.round((savings / income) * 100) : 0;
+
+    const byCategory = {};
+    formatted
+      .filter((t) => t.amount < 0)
+      .forEach((t) => {
+        byCategory[t.category] =
+          (byCategory[t.category] || 0) + Math.abs(t.amount);
+      });
+
+    const budgetUsage = Object.entries(budgetLimits).map(([cat, limit]) => ({
+      label: cat,
+      used: Math.round(((byCategory[cat] || 0) / limit) * 100),
+      spent: byCategory[cat] || 0,
+      limit,
+    }));
+
+    res.json({
+      income,
+      expenses,
+      savings,
+      savingsRate,
+      budgetUsage,
+      healthScore: 72,
     });
-
-  const budgetUsage = Object.entries(budgetLimits).map(([cat, limit]) => ({
-    label: cat,
-    used: Math.round(((byCategory[cat] || 0) / limit) * 100),
-    spent: byCategory[cat] || 0,
-    limit,
-  }));
-
-  res.json({
-    income,
-    expenses,
-    savings,
-    savingsRate,
-    budgetUsage,
-    healthScore: 72,
-  });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.status(200).json({ status: "UP", message: "VittaMitra server active" });
 });
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 VittaMitra backend running at http://localhost:${PORT}`);
-  console.log(`   POST /api/chat          → Vita AI chat`);
-  console.log(`   POST /api/log-expense   → Parse & log expense`);
-  console.log(`   GET  /api/transactions  → All transactions`);
-  console.log(`   GET  /api/summary       → Monthly summary\n`);
-});
+await connectDB();
+
+const startServer = () => {
+  const server = app.listen(PORT, () => {
+    console.log(`\n🚀 VittaMitra backend running at http://localhost:${PORT}`);
+    console.log(`   POST /api/chat          → Vita AI chat`);
+    console.log(`   POST /api/log-expense   → Parse & log expense`);
+    console.log(`   GET  /api/transactions  → All transactions`);
+    console.log(`   GET  /api/summary       → Monthly summary\n`);
+  });
+
+  server.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.log(`Port ${PORT} is currently in use. Attempting to clear the port automatically...`);
+      
+      const killCmd = process.platform === "win32"
+        ? `npx kill-port ${PORT}` // cross-platform utility works great on Windows Command prompt/Powershell
+        : `npx kill-port ${PORT}`;
+
+      exec(killCmd, (error) => {
+        if (error) {
+          console.error(`Failed to automatically free port ${PORT}:`, error.message);
+          console.log("Please close the conflicting process manually or choose another port.");
+          process.exit(1);
+        }
+        console.log(`Port ${PORT} cleared. Restarting the backend server...`);
+        setTimeout(startServer, 1000);
+      });
+    }
+  });
+};
+
+startServer();

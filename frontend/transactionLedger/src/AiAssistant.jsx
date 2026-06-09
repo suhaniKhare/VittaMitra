@@ -24,7 +24,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:4000/api";
+const API_BASE = "http://localhost:5000/api";
 
 // ─── INITIAL DATA (used as fallback when backend is offline) ──────────────────
 const INIT_TRANSACTIONS = [
@@ -355,53 +355,60 @@ function TypingDots() {
 }
 
 // ─── MIC BUTTON ───────────────────────────────────────────────────────────────
-function MicButton({ onResult, onListening }) {
+function MicButton({ onAudioReady, onListening }) {
   const [listening, setListening] = useState(false);
-  const recRef = useRef(null);
-  const supported =
-    typeof window !== "undefined" &&
-    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
-  const toggle = useCallback(() => {
-    if (!supported) {
-      alert(
-        "Speech recognition is not supported in your browser.\nPlease use Google Chrome or Microsoft Edge.",
-      );
-      return;
-    }
-    if (listening) {
-      recRef.current?.stop();
-      return;
-    }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const rec = new SR();
-    rec.lang = "en-IN";
-    rec.interimResults = false;
-    rec.maxAlternatives = 1;
-    recRef.current = rec;
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
 
-    rec.onstart = () => {
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        onAudioReady(audioBlob);
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start();
       setListening(true);
       onListening?.(true);
-    };
-    rec.onresult = (e) => {
-      onResult(e.results[0][0].transcript);
-    };
-    rec.onerror = () => {
+    } catch (err) {
+      console.error("Error accessing microphone:", err);
+      alert("Microphone access denied or not supported on your browser/device.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
       setListening(false);
       onListening?.(false);
-    };
-    rec.onend = () => {
-      setListening(false);
-      onListening?.(false);
-    };
-    rec.start();
-  }, [listening, supported, onResult, onListening]);
+    }
+  };
+
+  const toggle = () => {
+    if (listening) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
 
   return (
     <button
       onClick={toggle}
-      title={listening ? "Stop" : "Speak to Vita (🎙️)"}
+      title={listening ? "Stop" : "Record Voice Command (🎙️)"}
       style={{
         width: 36,
         height: 36,
@@ -416,7 +423,6 @@ function MicButton({ onResult, onListening }) {
         justifyContent: "center",
         fontSize: 16,
         transition: "all 0.2s",
-        opacity: supported ? 1 : 0.45,
         animation: listening ? "vmmic 1.2s ease-in-out infinite" : "none",
       }}
     >
@@ -537,9 +543,98 @@ export default function AiAssistant() {
     }
   };
 
-  const handleMicResult = (transcript) => {
-    setInput(transcript);
-    setTimeout(() => inputRef.current?.focus(), 50);
+  const handleAudioReady = async (blob) => {
+    setIsTyping(true);
+    addMsg("user", "🎙️ [Voice transaction recorded]");
+
+    const formData = new FormData();
+    formData.append("audio", blob, "recording.webm");
+    formData.append("userId", "demo-user");
+
+    try {
+      const response = await fetch(`${API_BASE}/ledger/translate-voice`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error("Voice translation request failed");
+      const data = await response.json();
+
+      setIsTyping(false);
+
+      // 1. Voice confirmation reply
+      if (data.confirmationMessage) {
+        addMsg("vita", data.confirmationMessage);
+
+        // Optional out-loud voice synthesis
+        if (typeof window !== "undefined" && window.speechSynthesis) {
+          const utterance = new SpeechSynthesisUtterance(data.confirmationMessage);
+          utterance.lang = "hi-IN";
+          window.speechSynthesis.speak(utterance);
+        }
+      }
+
+      // 2. Map new database transactions to UI
+      if (data.databaseRecord?.transactions) {
+        const formatted = data.databaseRecord.transactions.map((tx) => {
+          const isExpense = tx.type === "expense";
+          return {
+            id: tx._id || Math.random(),
+            desc: tx.description || tx.source || "Transaction",
+            category: tx.category,
+            subCategory: null,
+            amount: isExpense ? -tx.amount : tx.amount,
+            date: tx.date,
+            time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+            icon: tx.type === "income" ? "💼" : BUDGET_ICONS[tx.category] || "🛒",
+            paymentMode: tx.mode,
+          };
+        });
+        setTransactions((prev) => [...formatted, ...prev]);
+      }
+
+      // 3 & 4. Update dashboard metrics, health score & budget status dynamically by calling fresh summary
+      try {
+        const sumRes = await api("/summary");
+        if (sumRes.income !== undefined) {
+          // Sync healthScore with the latest value returned from daily snapshot
+          if (data.advancedOutputs?.dailyFinancialSnapshot) {
+            sumRes.healthScore = data.advancedOutputs.dailyFinancialSnapshot.financialHealthScore;
+          }
+          setSummary(sumRes);
+        }
+        if (sumRes.budgetUsage?.length) {
+          setBudget(
+            sumRes.budgetUsage.map((b) => ({
+              ...b,
+              color: BUDGET_COLORS[b.label] || "#6366f1",
+              icon: BUDGET_ICONS[b.label] || "📦",
+            })),
+          );
+        }
+      } catch (err) {
+        console.error("Error refreshing summary stats:", err);
+      }
+
+      // 5. Inject anomaly alerts
+      if (data.advancedOutputs?.anomalyAlert) {
+        const alertObj = data.advancedOutputs.anomalyAlert;
+        setAlerts((prev) => [
+          {
+            id: Date.now(),
+            type: "danger",
+            icon: "🔥",
+            title: alertObj.message || "Spending anomaly detected",
+            sub: "Would you like to review this transaction?",
+          },
+          ...prev,
+        ]);
+      }
+    } catch (error) {
+      console.error("Failed to parse voice command:", error);
+      setIsTyping(false);
+      addMsg("vita", "Sorry, I couldn't translate that voice recording. Please verify your backend server is active. 🙏");
+    }
   };
 
   return (
@@ -1009,7 +1104,7 @@ export default function AiAssistant() {
             }}
           >
             <MicButton
-              onResult={handleMicResult}
+              onAudioReady={handleAudioReady}
               onListening={setIsListening}
             />
             <input
